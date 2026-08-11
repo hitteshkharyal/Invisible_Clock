@@ -1,0 +1,39 @@
+{
+  "lower": [
+    7,
+    40,
+    132
+  ],
+  "upper": [
+    53,
+    48,
+    212
+  ],
+  "lower_lab": [
+    0,
+    111,
+    114
+  ],
+  "upper_lab": [
+    255,
+    141,
+    154
+  ],
+  "samples": [
+    [
+      30,
+      18,
+      172
+    ]
+  ],
+  "lab_samples": [
+    [
+      179,
+      126,
+      134
+    ]
+  ],
+  "hue_tolerance": 15,
+  "adaptive_mode": true,
+  "wraps_hue": false
+}
