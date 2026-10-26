@@ -139,44 +139,48 @@ class ColorDetector:
 
     def _compute_tolerance_range(self, sample: HSVTuple) -> None:
         h, s, v = sample
-        h_low = max(0, h - self.hue_tolerance)
-        h_high = min(179, h + self.hue_tolerance)
+        h_low = (h - self.hue_tolerance) % 180
+        h_high = (h + self.hue_tolerance) % 180
         s_low = max(SATURATION_MIN, s - SATURATION_MARGIN)
         v_low = max(VALUE_MIN, v - VALUE_MARGIN)
 
         self.lower_green = np.array([h_low, s_low, v_low], dtype=np.uint8)
         self.upper_green = np.array([h_high, 255, 255], dtype=np.uint8)
-        self._wraps_hue = False
+        self._wraps_hue = h_low > h_high
 
     def _compute_adaptive_range(self) -> None:
         hues = [s[0] for s in self.samples]
         sats = [s[1] for s in self.samples]
         vals = [s[2] for s in self.samples]
 
-        h_min, h_max = min(hues), max(hues)
+        sorted_hues = sorted(hues)
+        gaps = [
+            sorted_hues[i + 1] - sorted_hues[i]
+            for i in range(len(sorted_hues) - 1)
+        ]
+        gaps.append(sorted_hues[0] + 180 - sorted_hues[-1])
+        largest_gap_index = int(np.argmax(gaps))
+        arc_start = sorted_hues[(largest_gap_index + 1) % len(sorted_hues)]
+        arc_span = 180 - gaps[largest_gap_index]
         s_min, s_max = min(sats), max(sats)
         v_min, v_max = min(vals), max(vals)
 
-        h_low = max(0, h_min - ADAPTIVE_HUE_MARGIN - self.hue_tolerance)
-        h_high = min(179, h_max + ADAPTIVE_HUE_MARGIN + self.hue_tolerance)
+        hue_margin = ADAPTIVE_HUE_MARGIN + self.hue_tolerance
+        if arc_span + 2 * hue_margin >= 180:
+            h_low, h_high = 0, 179
+            self._wraps_hue = False
+        else:
+            h_low = int((arc_start - hue_margin) % 180)
+            h_high = int((arc_start + arc_span + hue_margin) % 180)
+            self._wraps_hue = h_low > h_high
+
         s_low = max(SATURATION_MIN, s_min - ADAPTIVE_SAT_MARGIN)
         s_high = min(255, s_max + ADAPTIVE_SAT_MARGIN)
         v_low = max(VALUE_MIN, v_min - ADAPTIVE_VAL_MARGIN)
         v_high = min(255, v_max + ADAPTIVE_VAL_MARGIN)
 
-        hue_span = h_max - h_min
-        if hue_span > 90 and len(hues) >= 2:
-            self._wraps_hue = True
-            shifted = [(h + 90) % 180 for h in hues]
-            sh_min, sh_max = min(shifted), max(shifted)
-            h_low = (sh_min - ADAPTIVE_HUE_MARGIN - self.hue_tolerance) % 180
-            h_high = (sh_max + ADAPTIVE_HUE_MARGIN + self.hue_tolerance) % 180
-            self.lower_green = np.array([h_low, s_low, v_low], dtype=np.uint8)
-            self.upper_green = np.array([h_high, s_high, v_high], dtype=np.uint8)
-        else:
-            self._wraps_hue = False
-            self.lower_green = np.array([h_low, s_low, v_low], dtype=np.uint8)
-            self.upper_green = np.array([h_high, s_high, v_high], dtype=np.uint8)
+        self.lower_green = np.array([h_low, s_low, v_low], dtype=np.uint8)
+        self.upper_green = np.array([h_high, s_high, v_high], dtype=np.uint8)
 
     def _compute_lab_range(self) -> None:
         """Build LAB bounds from samples — green cloth has low a, moderate-high b."""

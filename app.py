@@ -6,7 +6,6 @@ Run: streamlit run app.py
 
 from __future__ import annotations
 
-import time
 from typing import Optional
 
 import av
@@ -16,7 +15,7 @@ import streamlit as st
 from streamlit_webrtc import VideoProcessorBase, WebRtcMode, webrtc_streamer
 
 from cloak_engine import CloakEngine, EngineSettings
-from config import BACKGROUND_CAPTURE_FRAMES, BACKGROUND_FILE, CALIBRATION_FILE
+from config import BACKGROUND_CAPTURE_FRAMES
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -61,15 +60,22 @@ if "sample_x" not in st.session_state:
     st.session_state.sample_x = 320
 if "sample_y" not in st.session_state:
     st.session_state.sample_y = 240
+if "sampled_this_session" not in st.session_state:
+    st.session_state.sampled_this_session = False
+if "cloth_color_ready" not in st.session_state:
+    st.session_state.cloth_color_ready = False
+if "effect_enabled" not in st.session_state:
+    st.session_state.effect_enabled = False
 
 
 def _get_settings() -> EngineSettings:
     return EngineSettings(
+        effect_enabled=st.session_state.get("effect_enabled", False),
         mode=st.session_state.get("view_mode", "cloak"),
         feathering=st.session_state.get("feathering", True),
         background_gating=st.session_state.get("bg_gating", True),
-        dual_color_space=st.session_state.get("dual_cs", True),
-        spill_suppression=st.session_state.get("spill", True),
+        dual_color_space=False,
+        spill_suppression=False,
         bg_diff_threshold=st.session_state.get("bg_diff", 25),
         hue_tolerance=st.session_state.get("hue_tol", 15),
         adaptive_mode=st.session_state.get("adaptive", True),
@@ -92,118 +98,183 @@ class CloakVideoProcessor(VideoProcessorBase):
 
 
 # ---------------------------------------------------------------------------
-# Sidebar
+# Setup controls
 # ---------------------------------------------------------------------------
 st.title("🧥 Invisible Cloak")
 st.caption(
-    "Camera-based visual effect — not physical invisibility. "
-    "Keep the camera **stationary** and avoid changing the room after background capture."
+    "Capture the empty scene, sample any cloth color, then start the effect. "
+    "Keep the camera **stationary** for the best result."
 )
 
 engine: CloakEngine = get_engine()
 
-with st.sidebar:
-    st.header("Setup")
 
-    # --- Step 1: Background ---
-    st.subheader("1. Background")
-    st.markdown("Remove the green cloth from view, then capture the empty room.")
+@st.fragment(run_every="1s")
+def render_setup() -> None:
+    with st.sidebar:
+        st.header("Setup")
+        st.caption("Start the webcam below before capturing.")
 
-    col_b1, col_b2 = st.columns(2)
-    with col_b1:
-        if st.button("📸 Capture Background", use_container_width=True):
-            engine.start_background_capture(BACKGROUND_CAPTURE_FRAMES)
-            st.session_state.bg_msg = f"Collecting {BACKGROUND_CAPTURE_FRAMES} frames..."
-    with col_b2:
-        if st.button("📂 Load Saved", use_container_width=True):
-            if engine.background_mgr.load():
-                st.session_state.bg_msg = "Background loaded from file."
+        st.subheader("1. Capture the empty background")
+        st.markdown("Keep the cloth out of view and the camera still.")
+        if st.button("📸 Capture Background", width="stretch"):
+            if engine.last_frame is None:
+                st.session_state.bg_msg = "Start the webcam before capturing."
             else:
-                st.session_state.bg_msg = "No background.jpg found."
+                st.session_state.effect_enabled = False
+                engine.start_background_capture(BACKGROUND_CAPTURE_FRAMES)
+                st.session_state.bg_msg = "Collecting background frames..."
 
-    if engine.background_ready:
-        st.success("✅ Background ready")
-    elif engine.is_capturing_background:
-        st.warning(f"⏳ Capturing... ({len(engine.capture_buffer)}/{engine.capture_target_frames})")
-    else:
-        st.info("⬜ Background not captured yet")
-
-    if "bg_msg" in st.session_state:
-        st.caption(st.session_state.bg_msg)
-
-    st.divider()
-
-    # --- Step 2: Calibration ---
-    st.subheader("2. Calibrate Green")
-    st.markdown("Freeze a frame, pick a point on the cloth, add samples.")
-
-    if st.button("🎯 Freeze Frame for Calibration", use_container_width=True):
-        if engine.last_frame is not None:
-            st.session_state.calibration_frame = engine.last_frame.copy()
-            h, w = engine.last_frame.shape[:2]
-            st.session_state.sample_x = w // 2
-            st.session_state.sample_y = h // 2
+        if engine.is_capturing_background:
+            st.warning(
+                f"Capturing background: {len(engine.capture_buffer)}"
+                f"/{engine.capture_target_frames} frames"
+            )
+        elif engine.background_ready:
+            st.success("Background captured.")
         else:
-            st.warning("Start the webcam first.")
+            st.info("Background not captured yet.")
+        if st.session_state.get("bg_msg"):
+            st.caption(st.session_state.bg_msg)
 
-    cal_frame = st.session_state.calibration_frame
-    if cal_frame is not None:
-        h, w = cal_frame.shape[:2]
-        sx = st.slider("Sample X", 0, w - 1, st.session_state.sample_x, key="sx")
-        sy = st.slider("Sample Y", 0, h - 1, st.session_state.sample_y, key="sy")
-        st.session_state.sample_x = sx
-        st.session_state.sample_y = sy
+        st.divider()
+        st.subheader("2. Sample the cloth color")
+        st.markdown(
+            "Show the cloth to the camera, freeze a frame, and place the crosshair "
+            "on the cloth. Any color is supported."
+        )
+        if st.button("🎯 Freeze current frame", width="stretch"):
+            if engine.last_frame is None:
+                st.warning("Start the webcam first.")
+            else:
+                st.session_state.calibration_frame = engine.last_frame.copy()
+                height, width = engine.last_frame.shape[:2]
+                st.session_state.sample_x = width // 2
+                st.session_state.sample_y = height // 2
 
-        preview = cal_frame.copy()
-        cv2.drawMarker(preview, (sx, sy), (0, 0, 255), cv2.MARKER_CROSS, 20, 2)
-        st.image(cv2.cvtColor(preview, cv2.COLOR_BGR2RGB), caption="Calibration frame", use_container_width=True)
+        cal_frame = st.session_state.calibration_frame
+        if cal_frame is not None:
+            height, width = cal_frame.shape[:2]
+            sx = st.slider(
+                "Sample X", 0, width - 1, key="sample_x"
+            )
+            sy = st.slider(
+                "Sample Y", 0, height - 1, key="sample_y"
+            )
+            preview = cal_frame.copy()
+            cv2.drawMarker(preview, (sx, sy), (0, 0, 255), cv2.MARKER_CROSS, 20, 2)
+            st.image(
+                cv2.cvtColor(preview, cv2.COLOR_BGR2RGB),
+                caption="Position the crosshair on a clear patch of cloth.",
+                width="stretch",
+            )
 
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("➕ Add Sample", use_container_width=True):
-                sample = engine.sample_patch(cal_frame, sx, sy, radius=3)
-                if sample:
+            sample_col, reset_col = st.columns(2)
+            with sample_col:
+                if st.button("➕ Add cloth sample", width="stretch"):
+                    if not st.session_state.sampled_this_session:
+                        engine.detector.reset_samples()
+                        st.session_state.sampled_this_session = True
+                    sample = engine.sample_patch(cal_frame, sx, sy, radius=3)
+                    if sample is None:
+                        st.error("Could not sample that point. Choose another spot.")
+                    else:
+                        engine.detector.save_calibration()
+                        st.session_state.cloth_color_ready = True
+                        st.session_state.effect_enabled = False
+            with reset_col:
+                if st.button("🔄 Reset color", width="stretch"):
+                    engine.detector.reset_samples()
                     engine.detector.save_calibration()
-                    st.success(f"Sampled HSV {sample}")
-        with c2:
-            if st.button("🔄 Reset Samples", use_container_width=True):
-                engine.detector.reset_samples()
-                st.info("Samples cleared.")
+                    st.session_state.sampled_this_session = False
+                    st.session_state.cloth_color_ready = False
+                    st.session_state.effect_enabled = False
 
-    sample_str, range_str = engine.detector.range_description()
-    st.text(f"Last: {sample_str}")
-    st.text(f"Range: {range_str}")
+        if st.session_state.cloth_color_ready and engine.detector.last_sample_bgr:
+            blue, green, red = engine.detector.last_sample_bgr
+            st.success(
+                f"Cloth color sampled: RGB({red}, {green}, {blue}) · "
+                f"{len(engine.detector.samples)} sample(s)"
+            )
+        else:
+            st.info("No cloth color sampled in this session.")
 
-    st.divider()
+        st.divider()
+        st.subheader("3. Start the invisibility effect")
+        can_start = (
+            engine.background_ready
+            and st.session_state.cloth_color_ready
+            and bool(engine.detector.samples)
+        )
+        if st.session_state.effect_enabled:
+            if st.button("⏹ Stop effect", width="stretch"):
+                st.session_state.effect_enabled = False
+        elif st.button(
+            "▶ Start effect",
+            width="stretch",
+            disabled=not can_start,
+        ):
+            st.session_state.effect_enabled = True
 
-    # --- Detection tuning ---
-    st.subheader("3. Detection Tuning")
-    st.session_state.hue_tol = st.slider("Hue Tolerance", 2, 60, engine.detector.hue_tolerance)
-    st.session_state.adaptive = st.toggle("Adaptive Range", value=engine.detector.adaptive_mode)
-    st.session_state.dual_cs = st.toggle("Dual HSV + LAB", value=True)
-    st.session_state.bg_gating = st.toggle("Background Gating", value=True)
-    st.session_state.bg_diff = st.slider("BG Diff Threshold", 5, 80, 25)
-    st.session_state.spill = st.toggle("Spill Suppression", value=True)
-    st.session_state.min_area = st.slider("Min Contour Area", 100, 3000, 400, step=50)
-    st.session_state.morph_k = st.selectbox("Morph Kernel", [3, 5, 7, 9], index=1)
-    st.session_state.feathering = st.toggle("Edge Feathering", value=True)
-    st.session_state.feather_b = st.selectbox("Feather Blur", [7, 11, 15, 21], index=2)
+        if not can_start and not st.session_state.effect_enabled:
+            st.caption("Capture the background and sample the cloth color to enable Start.")
+        elif st.session_state.effect_enabled:
+            st.success("Effect is running.")
 
-    st.divider()
+        with st.expander("Fine-tune detection"):
+            st.slider(
+                "Color tolerance", 2, 60, engine.detector.hue_tolerance, key="hue_tol"
+            )
+            st.toggle(
+                "Adapt to additional samples",
+                value=engine.detector.adaptive_mode,
+                key="adaptive",
+            )
+            st.toggle(
+                "Ignore colors already in background",
+                value=True,
+                key="bg_gating",
+            )
+            st.slider(
+                "Background difference threshold", 5, 80, 25, key="bg_diff"
+            )
+            st.slider(
+                "Minimum detected area", 100, 3000, 400, step=50, key="min_area"
+            )
+            st.selectbox(
+                "Mask smoothing", [3, 5, 7, 9], index=1, key="morph_k"
+            )
+            st.toggle(
+                "Soften edges", value=True, key="feathering"
+            )
+            st.selectbox(
+                "Edge softness", [7, 11, 15, 21], index=2, key="feather_b"
+            )
+            st.radio(
+                "Preview",
+                options=["cloak", "mask", "debug"],
+                format_func=lambda x: {
+                    "cloak": "Invisible",
+                    "mask": "Mask",
+                    "debug": "Debug",
+                }[x],
+                horizontal=True,
+                key="view_mode",
+            )
 
-    # --- View mode ---
-    st.subheader("4. View Mode")
-    st.session_state.view_mode = st.radio(
-        "Display",
-        options=["cloak", "mask", "debug"],
-        format_func=lambda x: {"cloak": "🧥 Invisible", "mask": "⬛ Mask", "debug": "🔍 Debug (3-panel)"}[x],
-        horizontal=True,
-    )
+        engine.sync_settings(_get_settings())
+
+
+render_setup()
 
 # ---------------------------------------------------------------------------
 # Main video stream
 # ---------------------------------------------------------------------------
 st.subheader("Live Feed")
+st.caption(
+    "Click **START** to enable the webcam. Use the setup panel to capture the "
+    "background and sample your cloth color, then press **Start effect**."
+)
 
 webrtc_ctx = webrtc_streamer(
     key="invisible-cloak",
@@ -215,9 +286,9 @@ webrtc_ctx = webrtc_streamer(
 )
 
 if webrtc_ctx.state.playing:
-    st.info("Webcam active — use the sidebar to capture background and calibrate.")
+    st.info("Webcam active.")
 else:
-    st.warning("Click **START** above to enable your webcam.")
+    st.warning("Click **START** above to enable your webcam and begin setup.")
 
 # ---------------------------------------------------------------------------
 # Instructions
@@ -226,19 +297,18 @@ with st.expander("How to use"):
     st.markdown(
         """
         ### Quick start
-        1. Click **START** on the webcam widget.
-        2. Fix your camera — do not move it later.
-        3. Remove the green cloth → **Capture Background** in the sidebar.
-        4. Put on the green cloak.
-        5. **Freeze Frame** → move crosshair to cloth → **Add Sample** (repeat for dark/light/shadow areas).
-        6. Watch the invisible effect in the live feed.
+        1. Click **START** on the webcam widget and keep the camera still.
+        2. Remove the cloth, then click **Capture Background** in the sidebar.
+        3. Show the cloth in the camera, click **Freeze current frame**, and position the crosshair.
+        4. Click **Add cloth sample**. Add more samples for different shades of the same cloth.
+        5. Click **Start effect** after both setup steps are complete.
 
         ### Accuracy tips
         - Sample **5–10 points** across the cloth (dark, light, shadow, edges).
-        - Enable **Dual HSV + LAB** — reduces false positives from green objects in the room.
-        - Enable **Background Gating** — ignores green pixels that match the stored background.
+        - Any cloth color can be sampled; samples from a previous session are replaced by your first new sample.
+        - Enable **Ignore colors already in background** to reduce false positives.
         - Use **Debug** view to inspect original / mask / result side-by-side.
-        - Increase **Hue Tolerance** if parts of the cloth are missed.
+        - Increase **Color tolerance** if parts of the cloth are missed.
         - Decrease it if the background is incorrectly masked.
 
         ### Files
@@ -246,6 +316,3 @@ with st.expander("How to use"):
         - Calibration saved to `calibration.json`
         """
     )
-
-# Sync settings on every rerun
-engine.sync_settings(_get_settings())

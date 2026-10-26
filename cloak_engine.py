@@ -21,6 +21,7 @@ from mask_processor import MaskProcessor
 class EngineSettings:
     """Runtime toggles synced from the Streamlit sidebar."""
 
+    effect_enabled: bool = False
     mode: str = "cloak"  # cloak | mask | debug
     feathering: bool = True
     background_gating: bool = True
@@ -47,6 +48,7 @@ class CloakEngine:
     capture_buffer: List[np.ndarray] = field(default_factory=list)
     is_capturing_background: bool = False
     capture_target_frames: int = 30
+    effect_enabled: bool = False
 
     # Latest frame for calibration snapshot
     last_frame: Optional[np.ndarray] = None
@@ -60,6 +62,7 @@ class CloakEngine:
 
     def sync_settings(self, settings: EngineSettings) -> None:
         self.settings = settings
+        self.effect_enabled = settings.effect_enabled
         self.detector.hue_tolerance = settings.hue_tolerance
         self.detector.adaptive_mode = settings.adaptive_mode
         if self.detector.samples:
@@ -100,6 +103,9 @@ class CloakEngine:
             if len(self.capture_buffer) >= self.capture_target_frames:
                 self.finalize_background_capture()
             return self._draw_banner(frame, "Capturing background...", (0, 200, 255))
+
+        if not self.effect_enabled:
+            return frame.copy()
 
         if not self.background_ready:
             return self._draw_banner(frame, "Capture background first (sidebar)", (0, 165, 255))

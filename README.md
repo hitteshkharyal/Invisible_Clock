@@ -36,10 +36,10 @@ Opens at **http://localhost:8501**
 
 1. Click **START** on the webcam widget (allow camera permission).
 2. Fix the camera — do not move it later.
-3. Remove green cloth → sidebar **Capture Background**.
-4. Put on the green cloak.
-5. **Freeze Frame** → position crosshair on cloth → **Add Sample** (repeat for dark/light/shadow areas).
-6. Watch the live invisible effect.
+3. Remove the cloth → sidebar **Capture Background**.
+4. Show the cloth in the camera → **Freeze current frame**.
+5. Position the crosshair on the cloth and click **Add cloth sample**. Any cloth color is supported.
+6. Click **Start effect**. Add more samples for different shades of the same cloth if needed.
 
 ### Sidebar controls
 
@@ -48,11 +48,9 @@ Opens at **http://localhost:8501**
 | Capture Background | Median-stack 30 frames into reference |
 | Load Saved | Reload `background.jpg` |
 | Freeze Frame | Snapshot for calibration |
-| Add Sample | 5×5 patch HSV+LAB sample at crosshair |
-| Hue Tolerance | Widen/narrow green hue range |
-| Dual HSV + LAB | Intersect color spaces for accuracy |
-| Background Gating | Ignore green pixels matching stored BG |
-| Spill Suppression | Remove green fringing on edges |
+| Add cloth sample | Sample a 7×7 patch of any cloth color at the crosshair |
+| Color tolerance | Widen/narrow the sampled cloth-color range |
+| Background gating | Ignore matching-color pixels that are already in the stored background |
 | View Mode | Invisible / Mask / Debug (3-panel) |
 
 ## Desktop App (Legacy)
@@ -66,11 +64,11 @@ Keyboard controls: SPACE, C, ENTER, B, M, D, +/-, Q — see original section bel
 ## How It Works
 
 1. Capture a clean background (room without the green cloth).
-2. Calibrate the green color by sampling patches on your cloth.
-3. Detect green pixels using **HSV + LAB** color ranges.
+2. Calibrate the cloth color by sampling patches on your cloth.
+3. Detect matching pixels using **HSV** color ranges.
 4. Gate mask with **background difference** to avoid false positives.
 5. Replace masked pixels with the stored background.
-6. Feather edges and suppress green spill for smooth blending.
+6. Feather edges for smooth blending.
 
 ## Accuracy Improvements
 
