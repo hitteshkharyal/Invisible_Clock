@@ -32,6 +32,26 @@ streamlit run app.py
 
 Opens at **http://localhost:8501**
 
+### Streamlit Community Cloud webcam connections
+
+The app uses Google's public STUN server by default. Some networks block direct
+WebRTC connections and require a TURN relay. If the webcam stays on
+“Connection is taking longer than expected,” obtain a TURN URL and credentials
+from a TURN provider, then add them in the app's **Streamlit Community Cloud →
+Settings → Secrets**:
+
+```toml
+[webrtc]
+turn_server = "turn:your-turn-server.example:3478"
+turn_username = "your-turn-username"
+turn_credential = "your-turn-credential"
+```
+
+Keep the TURN credentials in Streamlit secrets; do not commit them to GitHub.
+The app adds this relay alongside STUN automatically. If the connection still
+fails, check that the TURN service is active and permits the relay transports
+required by your network.
+
 ### Web app workflow
 
 1. Click **START** on the webcam widget (allow camera permission).

@@ -6,12 +6,14 @@ Run: streamlit run app.py
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Optional
 
 import av
 import cv2
 import numpy as np
 import streamlit as st
+from streamlit.errors import StreamlitSecretNotFoundError
 from streamlit_webrtc import VideoProcessorBase, WebRtcMode, webrtc_streamer
 
 from cloak_engine import CloakEngine, EngineSettings
@@ -83,6 +85,43 @@ def _get_settings() -> EngineSettings:
         morph_kernel=st.session_state.get("morph_k", 5),
         feather_blur=st.session_state.get("feather_b", 15),
     )
+
+
+def _get_rtc_configuration() -> tuple[dict[str, list[dict[str, object]]], str | None]:
+    ice_servers: list[dict[str, object]] = [
+        {"urls": ["stun:stun.l.google.com:19302"]}
+    ]
+    try:
+        webrtc_secrets = st.secrets.get("webrtc", {})
+    except StreamlitSecretNotFoundError:
+        webrtc_secrets = {}
+
+    if not isinstance(webrtc_secrets, Mapping):
+        return {"iceServers": ice_servers}, "The [webrtc] secrets section must be a table."
+
+    turn_values = [
+        webrtc_secrets.get("turn_server"),
+        webrtc_secrets.get("turn_username"),
+        webrtc_secrets.get("turn_credential"),
+    ]
+    if not any(value is not None for value in turn_values):
+        return {"iceServers": ice_servers}, None
+    if not all(isinstance(value, str) and value.strip() for value in turn_values):
+        return (
+            {"iceServers": ice_servers},
+            "TURN settings are incomplete. Set turn_server, turn_username, "
+            "and turn_credential under [webrtc] in Streamlit secrets.",
+        )
+
+    turn_server, turn_username, turn_credential = turn_values
+    ice_servers.append(
+        {
+            "urls": [turn_server],
+            "username": turn_username,
+            "credential": turn_credential,
+        }
+    )
+    return {"iceServers": ice_servers}, None
 
 
 class CloakVideoProcessor(VideoProcessorBase):
@@ -276,10 +315,15 @@ st.caption(
     "background and sample your cloth color, then press **Start effect**."
 )
 
+rtc_configuration, rtc_configuration_error = _get_rtc_configuration()
+if rtc_configuration_error:
+    st.error(rtc_configuration_error)
+    st.stop()
+
 webrtc_ctx = webrtc_streamer(
     key="invisible-cloak",
     mode=WebRtcMode.SENDRECV,
-    rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
+    rtc_configuration=rtc_configuration,
     media_stream_constraints={"video": {"width": {"ideal": 640}, "height": {"ideal": 480}}, "audio": False},
     video_processor_factory=CloakVideoProcessor,
     async_processing=True,
@@ -289,6 +333,12 @@ if webrtc_ctx.state.playing:
     st.info("Webcam active.")
 else:
     st.warning("Click **START** above to enable your webcam and begin setup.")
+if len(rtc_configuration["iceServers"]) == 1:
+    st.info(
+        "If the webcam stays on “Connection is taking longer than expected,” "
+        "this network may require a TURN relay. See the Streamlit Cloud TURN "
+        "setup in the README."
+    )
 
 # ---------------------------------------------------------------------------
 # Instructions
